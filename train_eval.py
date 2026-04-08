@@ -471,7 +471,7 @@ def infer(
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────────────────────────────────────
-DEBUG = True  # Set to False for full training/eval
+DEBUG = False  # Set to False for full training/eval
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QR-ViT-Det: Train / Eval / Infer")
