@@ -25,7 +25,7 @@ class Config:
     dropout: float = 0.1
 
     # ── Detection head ─────────────────────────────────────────────────────
-    num_queries: int = 8  # Max QR codes per image (with slack)
+    num_queries: int = 16  # Max QR codes per image (with slack)
     # Each query predicts: [x1, y1, x2, y2] (normalized 0-1) + objectness
 
     # ── Loss weights ───────────────────────────────────────────────────────
@@ -49,8 +49,8 @@ class Config:
     batch_size: int = 10
     num_workers: int = 2
     epochs: int = 100
-    lr: float = 1e-4
-    lr_backbone: float = 1e-5  # Slower LR for CNN stem
+    lr: float = 5e-4
+    lr_backbone: float = 5e-4  # Slower LR for CNN stem
     weight_decay: float = 1e-4
     lr_drop: int = 70  # StepLR decay epoch
     grad_clip: float = 0.1

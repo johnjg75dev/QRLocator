@@ -34,36 +34,33 @@ from config import CFG
 
 class CNNStem(nn.Module):
     """
-    4 convolutional blocks, overall stride = 10.
-    (B, 1, H, W) → (B, embed_dim, H/10, W/10)
-
-    Verified for H=180, W=320 → (B, embed_dim, 18, 32)
+    Fixed CNN Stem: No skipped pixels!
+    Reduces (1, 180, 320) -> (embed_dim, 18, 32) exactly.
     """
-
-    def __init__(self, in_channels: int = 1, embed_dim: int = 256):
+    def __init__(self, in_channels: int = 1, embed_dim: int = 128):
         super().__init__()
         self.body = nn.Sequential(
-            # Block 1: stride 2  →  (B,  32, H/2,  W/2)
-            nn.Conv2d(in_channels, 32, 3, stride=2, padding=1, bias=False),
+            # Block 1: Stride 2 (halves the image safely)
+            # Output: (32, 90, 160)
+            nn.Conv2d(in_channels, 32, kernel_size=4, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(32),
             nn.GELU(),
-            # Block 2: stride 5  →  (B,  64, H/5,  W/5)
-            nn.Conv2d(32, 64, 3, stride=5, padding=1, bias=False),
+            
+            # Block 2: Kernel 5 / Stride 5 (Tiles perfectly, zero skipped pixels)
+            # Output: (64, 18, 32)
+            nn.Conv2d(32, 64, kernel_size=5, stride=5, padding=0, bias=False),
             nn.BatchNorm2d(64),
             nn.GELU(),
-            # Block 3: stride 1 →  (B, 128, H/5, W/5)  [maintains spatial]
-            nn.Conv2d(64, 128, 3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(128),
-            nn.GELU(),
-            # Block 4: stride 1 →  (B, embed_dim, H/10, W/10)
-            nn.Conv2d(128, embed_dim, 3, stride=1, padding=1, bias=False),
+            
+            # Block 3: Feature mixing (maintains 18x32 spatial size)
+            # Output: (embed_dim, 18, 32)
+            nn.Conv2d(64, embed_dim, kernel_size=3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(embed_dim),
-            nn.GELU(),
+            nn.GELU()
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.body(x)  # (B, embed_dim, H/16, W/16)
-
+        return self.body(x)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2-D Sinusoidal Positional Encoding
@@ -106,8 +103,6 @@ class PositionalEncoding2D(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 # Transformer building blocks
 # ──────────────────────────────────────────────────────────────────────────────
-
-
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float, dropout: float):
         super().__init__()
@@ -126,21 +121,13 @@ class TransformerEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(embed_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, tgt: torch.Tensor, memory: torch.Tensor, query_pos: torch.Tensor) -> torch.Tensor:
-        # 1. Self-attention (add pos to Q and K)
-        h = self.norm1(tgt)
-        q = k = h + query_pos
-        sa, _ = self.self_attn(q, k, h)
-        tgt = tgt + self.drop(sa)
-
-        # 2. Cross-attention
-        h = self.norm2(tgt)
-        q = h + query_pos
-        ca, _ = self.cross_attn(q, memory, memory)
-        tgt = tgt + self.drop(ca)
-
-        tgt = tgt + self.ffn(self.norm3(tgt))
-        return tgt
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Standard Encoder: Self-attention only
+        h = self.norm1(x)
+        attn_out, _ = self.self_attn(h, h, h)
+        x = x + self.drop(attn_out)
+        x = x + self.ffn(self.norm2(x))
+        return x
 
 
 class TransformerDecoderLayer(nn.Module):
@@ -165,15 +152,17 @@ class TransformerDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(embed_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, tgt: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
-        # Self-attention over queries
+    def forward(self, tgt: torch.Tensor, memory: torch.Tensor, query_pos: torch.Tensor) -> torch.Tensor:
+        # 1. Self-attention over queries (add positional query to Q and K)
         h = self.norm1(tgt)
-        sa, _ = self.self_attn(h, h, h)
+        q = k = h + query_pos
+        sa, _ = self.self_attn(q, k, h)
         tgt = tgt + self.drop(sa)
 
-        # Cross-attention: queries attend to encoder memory
+        # 2. Cross-attention: queries attend to encoder memory
         h = self.norm2(tgt)
-        ca, _ = self.cross_attn(h, memory, memory)
+        q = h + query_pos
+        ca, _ = self.cross_attn(q, memory, memory)
         tgt = tgt + self.drop(ca)
 
         tgt = tgt + self.ffn(self.norm3(tgt))
@@ -295,7 +284,21 @@ class QRViTDet(nn.Module):
         tgt = self.dec_norm(tgt)  # (B, Q, E)
 
         # ── Heads ─────────────────────────────────────────────────────────────
-        pred_boxes = self.bbox_head(tgt).sigmoid()  # (B, Q, 4) in [0,1]
+        # Predict Center-X, Center-Y, Width, Height
+        pred_cxcywh = self.bbox_head(tgt).sigmoid()  # (B, Q, 4) in [0,1]
+        
+        # Unbind the 4 coordinates
+        cx, cy, w, h = pred_cxcywh.unbind(-1)
+        
+        # Mathematically convert to x1, y1, x2, y2 (Guarantees x2 > x1 and y2 > y1)
+        x1 = cx - 0.5 * w
+        y1 = cy - 0.5 * h
+        x2 = cx + 0.5 * w
+        y2 = cy + 0.5 * h
+        
+        # Stack back together
+        pred_boxes = torch.stack([x1, y1, x2, y2], dim=-1)
+        
         pred_logits = self.class_head(tgt)  # (B, Q, 2)
 
         return {"pred_boxes": pred_boxes, "pred_logits": pred_logits}
