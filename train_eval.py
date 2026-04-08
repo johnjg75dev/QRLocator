@@ -69,8 +69,8 @@ def generalized_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
     inter_h = (inter_y2 - inter_y1).clamp(min=0)
     inter_area = inter_w * inter_h
 
-    area1 = ((x2 - x1) * (y2 - y1)).clamp(min=0)
-    area2 = ((gx2 - gx1) * (gy2 - gy1)).clamp(min=0)
+    area1 = (x2 - x1).clamp(min=0) * (y2 - y1).clamp(min=0)
+    area2 = (gx2 - gx1).clamp(min=0) * (gy2 - gy1).clamp(min=0)
     union_area = area1 + area2 - inter_area + 1e-6
 
     iou = inter_area / union_area
@@ -80,7 +80,7 @@ def generalized_iou(boxes1: torch.Tensor, boxes2: torch.Tensor) -> torch.Tensor:
     enc_y1 = torch.min(y1, gy1)
     enc_x2 = torch.max(x2, gx2)
     enc_y2 = torch.max(y2, gy2)
-    enc_area = ((enc_x2 - enc_x1) * (enc_y2 - enc_y1)).clamp(min=1e-6)
+    enc_area = ((enc_x2 - enc_x1).clamp(min=0) * (enc_y2 - enc_y1).clamp(min=0)).clamp(min=1e-6)
 
     giou = iou - (enc_area - union_area) / enc_area
     return giou  # (N, M)
@@ -212,8 +212,8 @@ def iou_single(b1: np.ndarray, b2: np.ndarray) -> float:
     ix1 = max(b1[0], b2[0]); iy1 = max(b1[1], b2[1])
     ix2 = min(b1[2], b2[2]); iy2 = min(b1[3], b2[3])
     inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
-    a1 = (b1[2] - b1[0]) * (b1[3] - b1[1])
-    a2 = (b2[2] - b2[0]) * (b2[3] - b2[1])
+    a1 = max(0, b1[2] - b1[0]) * max(0, b1[3] - b1[1])
+    a2 = max(0, b2[2] - b2[0]) * max(0, b2[3] - b2[1])
     union = a1 + a2 - inter
     return inter / union if union > 0 else 0.0
 
@@ -301,7 +301,7 @@ def train(cfg=CFG):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    #cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Data ────────────────────────────────────────────────────────────────
     train_dl, val_dl, _ = build_dataloaders(cfg)

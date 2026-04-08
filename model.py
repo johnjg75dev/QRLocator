@@ -126,13 +126,21 @@ class TransformerEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(embed_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Pre-norm residual (more stable than post-norm for moderate depth)
-        h = self.norm1(x)
-        attn_out, _ = self.self_attn(h, h, h)
-        x = x + self.drop(attn_out)
-        x = x + self.ffn(self.norm2(x))
-        return x
+    def forward(self, tgt: torch.Tensor, memory: torch.Tensor, query_pos: torch.Tensor) -> torch.Tensor:
+        # 1. Self-attention (add pos to Q and K)
+        h = self.norm1(tgt)
+        q = k = h + query_pos
+        sa, _ = self.self_attn(q, k, h)
+        tgt = tgt + self.drop(sa)
+
+        # 2. Cross-attention
+        h = self.norm2(tgt)
+        q = h + query_pos
+        ca, _ = self.cross_attn(q, memory, memory)
+        tgt = tgt + self.drop(ca)
+
+        tgt = tgt + self.ffn(self.norm3(tgt))
+        return tgt
 
 
 class TransformerDecoderLayer(nn.Module):
@@ -281,9 +289,9 @@ class QRViTDet(nn.Module):
 
         # ── Decoder ──────────────────────────────────────────────────────────
         queries = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, E)
-        tgt = queries
+        tgt = torch.zeros_like(queries)  # DETR strictly starts with zeros!
         for layer in self.decoder:
-            tgt = layer(tgt, memory)
+            tgt = layer(tgt, memory, query_pos=queries)
         tgt = self.dec_norm(tgt)  # (B, Q, E)
 
         # ── Heads ─────────────────────────────────────────────────────────────
