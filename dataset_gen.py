@@ -437,7 +437,7 @@ def build_augmentation_pipeline(train: bool = True) -> A.Compose:
             ),
             # ── Photometric ────────────────────────────────────────────────
             A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.6),
-            A.GaussNoise(std_range=(5, 30), p=0.4),
+            A.GaussNoise(std_range=(0.05, 0.3), p=0.4),
             A.GaussianBlur(blur_limit=(3, 7), p=0.3),
             A.MotionBlur(blur_limit=7, p=0.2),
             A.ImageCompression(quality_range=(40, 95), p=0.3),

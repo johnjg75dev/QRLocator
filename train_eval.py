@@ -327,6 +327,7 @@ def train(cfg=CFG):
         model.train()
         running = {"total": 0.0, "loss_class": 0.0, "loss_bbox": 0.0, "loss_giou": 0.0}
         t0 = time.time()
+        print("Starting epoch {:03d}...".format(epoch))
 
         for batch_idx, (images, gt_boxes_list, _) in enumerate(train_dl):
             images = images.to(device)
@@ -334,6 +335,7 @@ def train(cfg=CFG):
             out = model(images)
             loss_dict = criterion(out["pred_boxes"], out["pred_logits"], gt_boxes_list)
             loss = loss_dict["total"]
+            print(f"Batch {batch_idx+1}/{len(train_dl)}  Loss: {loss.item():.4f}")
 
             optimizer.zero_grad()
             loss.backward()
@@ -469,6 +471,7 @@ def infer(
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────────────────────────────────────
+DEBUG = True  # Set to False for full training/eval
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QR-ViT-Det: Train / Eval / Infer")
@@ -478,17 +481,27 @@ if __name__ == "__main__":
     parser.add_argument("--image",  type=str, default=None, help="Image path for infer")
     parser.add_argument("--output", type=str, default="output.png",
                         help="Output image path for infer")
-    args = parser.parse_args()
+    if not DEBUG:
+        args = parser.parse_args()
 
-    if args.mode == "train":
-        train(CFG)
+        if args.mode == "train":
+            train(CFG)
 
-    elif args.mode == "eval":
-        if not args.checkpoint:
-            raise ValueError("--checkpoint required for eval mode")
-        evaluate(args.checkpoint, CFG)
+        elif args.mode == "eval":
+            if not args.checkpoint:
+                raise ValueError("--checkpoint required for eval mode")
+            evaluate(args.checkpoint, CFG)
 
-    elif args.mode == "infer":
-        if not args.checkpoint or not args.image:
-            raise ValueError("--checkpoint and --image required for infer mode")
-        infer(args.image, args.checkpoint, args.output, CFG)
+        elif args.mode == "infer":
+            if not args.checkpoint or not args.image:
+                raise ValueError("--checkpoint and --image required for infer mode")
+            infer(args.image, args.checkpoint, args.output, CFG)
+    else:
+        print("DEBUG MODE: Running quick train and eval with reduced dataset and epochs.")
+        debug_cfg = CFG
+        #debug_cfg.num_train = 100
+        #debug_cfg.num_val = 20
+        #debug_cfg.num_test = 20
+        #debug_cfg.epochs = 2
+        train(debug_cfg)
+        evaluate(f"{debug_cfg.checkpoint_dir}last.pt", debug_cfg)

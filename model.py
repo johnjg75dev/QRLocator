@@ -4,12 +4,12 @@
 #
 # Architecture overview
 # ─────────────────────
-#  Input (B, 1, 720, 1280)
+#  Input (B, 1, 180, 320)
 #       │
-#  CNN Stem   4× conv blocks, stride=16 total
-#       │ (B, embed_dim, 45, 80)
+#  CNN Stem   4× conv blocks, stride=10 total
+#       │ (B, embed_dim, 18, 32)
 #  Flatten + Positional Encoding
-#       │ (B, 3600, embed_dim)
+#       │ (B, 576, embed_dim)
 #  Transformer Encoder  (enc_layers × MHA + FFN)
 #       │ (B, 3600, embed_dim)
 #  Transformer Decoder  (dec_layers × cross-attn + self-attn)
@@ -28,15 +28,16 @@ from config import CFG
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CNN Stem: learns patch-like features, outputs 1/16 spatial resolution
+# CNN Stem: learns patch-like features, outputs 1/10 spatial resolution
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class CNNStem(nn.Module):
     """
-    4 convolutional blocks, overall stride = 16.
-    (B, 1, H, W) → (B, embed_dim, H/16, W/16)
+    4 convolutional blocks, overall stride = 10.
+    (B, 1, H, W) → (B, embed_dim, H/10, W/10)
 
-    Verified for H=720, W=1280 → (B, embed_dim, 45, 80)
+    Verified for H=180, W=320 → (B, embed_dim, 18, 32)
     """
 
     def __init__(self, in_channels: int = 1, embed_dim: int = 256):
@@ -46,19 +47,16 @@ class CNNStem(nn.Module):
             nn.Conv2d(in_channels, 32, 3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(32),
             nn.GELU(),
-
-            # Block 2: stride 2  →  (B,  64, H/4,  W/4)
-            nn.Conv2d(32, 64, 3, stride=2, padding=1, bias=False),
+            # Block 2: stride 5  →  (B,  64, H/5,  W/5)
+            nn.Conv2d(32, 64, 3, stride=5, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.GELU(),
-
-            # Block 3: stride 2  →  (B, 128, H/8,  W/8)
-            nn.Conv2d(64, 128, 3, stride=2, padding=1, bias=False),
+            # Block 3: stride 1 →  (B, 128, H/5, W/5)  [maintains spatial]
+            nn.Conv2d(64, 128, 3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(128),
             nn.GELU(),
-
-            # Block 4: stride 2  →  (B, embed_dim, H/16, W/16)
-            nn.Conv2d(128, embed_dim, 3, stride=2, padding=1, bias=False),
+            # Block 4: stride 1 →  (B, embed_dim, H/10, W/10)
+            nn.Conv2d(128, embed_dim, 3, stride=1, padding=1, bias=False),
             nn.BatchNorm2d(embed_dim),
             nn.GELU(),
         )
@@ -70,6 +68,7 @@ class CNNStem(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 # 2-D Sinusoidal Positional Encoding
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class PositionalEncoding2D(nn.Module):
     """
@@ -93,8 +92,8 @@ class PositionalEncoding2D(nn.Module):
         pe[:, :, 1:d:2] = (torch.cos(y_pos * div_term)).unsqueeze(1).expand(h_feat, w_feat, -1)
 
         # X encoding → second half of channels
-        pe[:, :, d::2]     = (torch.sin(x_pos * div_term)).unsqueeze(0).expand(h_feat, w_feat, -1)
-        pe[:, :, d + 1::2] = (torch.cos(x_pos * div_term)).unsqueeze(0).expand(h_feat, w_feat, -1)
+        pe[:, :, d::2] = (torch.sin(x_pos * div_term)).unsqueeze(0).expand(h_feat, w_feat, -1)
+        pe[:, :, d + 1 :: 2] = (torch.cos(x_pos * div_term)).unsqueeze(0).expand(h_feat, w_feat, -1)
 
         pe = pe.view(1, h_feat * w_feat, embed_dim)  # (1, H*W, embed_dim)
         self.register_buffer("pe", pe)
@@ -108,10 +107,13 @@ class PositionalEncoding2D(nn.Module):
 # Transformer building blocks
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float, dropout: float):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout, batch_first=True
+        )
         hidden = int(embed_dim * mlp_ratio)
         self.ffn = nn.Sequential(
             nn.Linear(embed_dim, hidden),
@@ -122,7 +124,7 @@ class TransformerEncoderLayer(nn.Module):
         )
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
-        self.drop  = nn.Dropout(dropout)
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Pre-norm residual (more stable than post-norm for moderate depth)
@@ -136,8 +138,12 @@ class TransformerEncoderLayer(nn.Module):
 class TransformerDecoderLayer(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float, dropout: float):
         super().__init__()
-        self.self_attn  = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
-        self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout, batch_first=True
+        )
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout=dropout, batch_first=True
+        )
         hidden = int(embed_dim * mlp_ratio)
         self.ffn = nn.Sequential(
             nn.Linear(embed_dim, hidden),
@@ -149,7 +155,7 @@ class TransformerDecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
         self.norm3 = nn.LayerNorm(embed_dim)
-        self.drop  = nn.Dropout(dropout)
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, tgt: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
         # Self-attention over queries
@@ -170,15 +176,14 @@ class TransformerDecoderLayer(nn.Module):
 # Detection FFN (shared, called on each query embedding)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class MLP(nn.Module):
     """Simple 3-layer MLP used as the detection head."""
 
     def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, num_layers: int = 3):
         super().__init__()
         dims = [in_dim] + [hidden_dim] * (num_layers - 1) + [out_dim]
-        self.layers = nn.ModuleList(
-            [nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)]
-        )
+        self.layers = nn.ModuleList([nn.Linear(dims[i], dims[i + 1]) for i in range(len(dims) - 1)])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         for i, layer in enumerate(self.layers):
@@ -189,6 +194,7 @@ class MLP(nn.Module):
 # ──────────────────────────────────────────────────────────────────────────────
 # Full QR-ViT-Det Model
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class QRViTDet(nn.Module):
     """
@@ -208,8 +214,8 @@ class QRViTDet(nn.Module):
         super().__init__()
         self.cfg = cfg
 
-        h_feat = cfg.img_h // cfg.patch_stride   # 720 / 16 = 45
-        w_feat = cfg.img_w // cfg.patch_stride   # 1280 / 16 = 80
+        h_feat = cfg.img_h // cfg.patch_stride
+        w_feat = cfg.img_w // cfg.patch_stride
 
         # ── Backbone ────────────────────────────────────────────────────────
         self.backbone = CNNStem(cfg.in_channels, cfg.embed_dim)
@@ -218,25 +224,29 @@ class QRViTDet(nn.Module):
         self.pos_enc = PositionalEncoding2D(cfg.embed_dim, h_feat, w_feat)
 
         # ── Encoder ─────────────────────────────────────────────────────────
-        self.encoder = nn.ModuleList([
-            TransformerEncoderLayer(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.dropout)
-            for _ in range(cfg.enc_layers)
-        ])
+        self.encoder = nn.ModuleList(
+            [
+                TransformerEncoderLayer(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.dropout)
+                for _ in range(cfg.enc_layers)
+            ]
+        )
         self.enc_norm = nn.LayerNorm(cfg.embed_dim)
 
         # ── Object Queries ──────────────────────────────────────────────────
         self.query_embed = nn.Embedding(cfg.num_queries, cfg.embed_dim)
 
         # ── Decoder ─────────────────────────────────────────────────────────
-        self.decoder = nn.ModuleList([
-            TransformerDecoderLayer(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.dropout)
-            for _ in range(cfg.dec_layers)
-        ])
+        self.decoder = nn.ModuleList(
+            [
+                TransformerDecoderLayer(cfg.embed_dim, cfg.num_heads, cfg.mlp_ratio, cfg.dropout)
+                for _ in range(cfg.dec_layers)
+            ]
+        )
         self.dec_norm = nn.LayerNorm(cfg.embed_dim)
 
         # ── Detection heads ─────────────────────────────────────────────────
-        self.bbox_head  = MLP(cfg.embed_dim, cfg.embed_dim, 4,          num_layers=3)
-        self.class_head = nn.Linear(cfg.embed_dim, 2)   # [qr_code, no-object]
+        self.bbox_head = MLP(cfg.embed_dim, cfg.embed_dim, 4, num_layers=3)
+        self.class_head = nn.Linear(cfg.embed_dim, 2)  # [qr_code, no-object]
 
         self._init_weights()
 
@@ -256,29 +266,29 @@ class QRViTDet(nn.Module):
         B = x.size(0)
 
         # ── Backbone ─────────────────────────────────────────────────────────
-        feat = self.backbone(x)                           # (B, E, H/16, W/16)
+        feat = self.backbone(x)  # (B, E, H/10, W/10)
         E = feat.size(1)
-        feat_seq = feat.flatten(2).permute(0, 2, 1)      # (B, S, E)  S=3600
+        feat_seq = feat.flatten(2).permute(0, 2, 1)  # (B, S, E)  S=3600
 
         # ── Positional encoding ──────────────────────────────────────────────
-        feat_seq = self.pos_enc(feat_seq)                 # (B, S, E)
+        feat_seq = self.pos_enc(feat_seq)  # (B, S, E)
 
         # ── Encoder ──────────────────────────────────────────────────────────
         memory = feat_seq
         for layer in self.encoder:
             memory = layer(memory)
-        memory = self.enc_norm(memory)                    # (B, S, E)
+        memory = self.enc_norm(memory)  # (B, S, E)
 
         # ── Decoder ──────────────────────────────────────────────────────────
         queries = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, E)
         tgt = queries
         for layer in self.decoder:
             tgt = layer(tgt, memory)
-        tgt = self.dec_norm(tgt)                          # (B, Q, E)
+        tgt = self.dec_norm(tgt)  # (B, Q, E)
 
         # ── Heads ─────────────────────────────────────────────────────────────
-        pred_boxes   = self.bbox_head(tgt).sigmoid()      # (B, Q, 4) in [0,1]
-        pred_logits  = self.class_head(tgt)               # (B, Q, 2)
+        pred_boxes = self.bbox_head(tgt).sigmoid()  # (B, Q, 4) in [0,1]
+        pred_logits = self.class_head(tgt)  # (B, Q, 2)
 
         return {"pred_boxes": pred_boxes, "pred_logits": pred_logits}
 
