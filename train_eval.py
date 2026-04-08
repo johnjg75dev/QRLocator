@@ -13,7 +13,7 @@
 #   python train_eval.py --mode infer --checkpoint checkpoints/best.pt \
 #                        --image path/to/image.png --output out.png
 # ─────────────────────────────────────────────────────────────────────────────
-
+import os
 import argparse
 import time
 from pathlib import Path
@@ -301,7 +301,7 @@ def train(cfg=CFG):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    #cfg.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Data ────────────────────────────────────────────────────────────────
     train_dl, val_dl, _ = build_dataloaders(cfg)
@@ -309,8 +309,6 @@ def train(cfg=CFG):
 
     # ── Model ────────────────────────────────────────────────────────────────
     model = QRViTDet(cfg).to(device)
-    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Trainable params: {n_params:,}")
 
     # ── Optimiser: separate LR for backbone ─────────────────────────────────
     param_groups = [
@@ -321,13 +319,30 @@ def train(cfg=CFG):
     scheduler = StepLR(optimizer, step_size=cfg.lr_drop, gamma=0.1)
     criterion = SetCriterion(cfg).to(device)
 
-    best_f1 = 0.0
+    checkpoint_path = f"{cfg.checkpoint_dir}/best.pt"
+    if os.path.exists(checkpoint_path):
+        print(f"Resuming from existing checkpoint: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+        start_epoch = ckpt["epoch"] + 1
+        end_epoch = start_epoch + cfg.epochs + 1
+        best_f1 = ckpt["metrics"]["f1"]
+        print(f"Resumed at epoch {start_epoch}, current best F1: {best_f1:.4f}")
+    else:
+        start_epoch = 1
+        end_epoch = cfg.epochs + 1
+        best_f1 = 0.0
+        print("No existing checkpoint found - starting fresh training")
+        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Trainable params: {n_params:,}")
 
-    for epoch in range(1, cfg.epochs + 1):
+    for epoch in range(start_epoch, end_epoch):
         model.train()
         running = {"total": 0.0, "loss_class": 0.0, "loss_bbox": 0.0, "loss_giou": 0.0}
         t0 = time.time()
-        print("Starting epoch {:03d}...".format(epoch))
+        #print("Starting epoch {:03d}...".format(epoch))
 
         for batch_idx, (images, gt_boxes_list, _) in enumerate(train_dl):
             images = images.to(device)
@@ -395,7 +410,7 @@ def train(cfg=CFG):
 def evaluate(checkpoint_path: str, cfg=CFG):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model = QRViTDet(cfg).to(device)
     model.load_state_dict(ckpt["model_state"])
     print(f"Loaded checkpoint from epoch {ckpt['epoch']}")
@@ -428,7 +443,7 @@ def infer(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load model
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model = QRViTDet(cfg).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
