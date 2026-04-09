@@ -121,10 +121,12 @@ class TransformerEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(embed_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Standard Encoder: Self-attention only
+    # Change the forward signature
+    def forward(self, x: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
         h = self.norm1(x)
-        attn_out, _ = self.self_attn(h, h, h)
+        # Add position to Query and Key (Standard DETR practice)
+        q = k = h + pos
+        attn_out, _ = self.self_attn(q, k, h)
         x = x + self.drop(attn_out)
         x = x + self.ffn(self.norm2(x))
         return x
@@ -258,6 +260,9 @@ class QRViTDet(nn.Module):
                 nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                
+        # Give queries a random starting point to prevent collapse
+        nn.init.normal_(self.query_embed.weight, std=0.02)
 
     def forward(self, x: torch.Tensor) -> dict:
         B = x.size(0)
@@ -272,9 +277,12 @@ class QRViTDet(nn.Module):
 
         # ── Encoder ──────────────────────────────────────────────────────────
         memory = feat_seq
+        # Calculate the 2D position ONCE
+        pos = self.pos_enc.pe # This is the (1, 576, 128) tensor
+        
         for layer in self.encoder:
-            memory = layer(memory)
-        memory = self.enc_norm(memory)  # (B, S, E)
+            memory = layer(memory, pos=pos) # Inject at every layer
+        memory = self.enc_norm(memory)
 
         # ── Decoder ──────────────────────────────────────────────────────────
         queries = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, E)
