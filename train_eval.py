@@ -350,7 +350,7 @@ def train(cfg=CFG):
             out = model(images)
             loss_dict = criterion(out["pred_boxes"], out["pred_logits"], gt_boxes_list)
             loss = loss_dict["total"]
-            print(f"Batch {batch_idx+1}/{len(train_dl)}  Loss: {loss.item():.4f}")
+            #print(f"Batch {batch_idx+1}/{len(train_dl)}  Loss: {loss.item():.4f}")
 
             optimizer.zero_grad()
             loss.backward()

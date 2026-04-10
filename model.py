@@ -251,6 +251,16 @@ class QRViTDet(nn.Module):
 
         self._init_weights()
 
+        """# Gemini started with this but didnt get to finish it. The idea was to give the model a strong spatial prior by adding fixed query positions that correspond to a grid of locations on the image. This way, each query would have a built-in bias towards a certain region of the image, which could help it learn to detect QR codes more effectively.
+        # Generate a dynamic grid of fixed starting points for the queries
+        side = int(math.ceil(math.sqrt(cfg.num_queries)))
+        steps = torch.linspace(0.15, 0.85, side)
+        gy, gx = torch.meshgrid(steps, steps, indexing="ij")
+        
+        # Flatten into pairs and cut off any excess points
+        ref_pts = torch.stack([gx.flatten(), gy.flatten()], dim=-1)[:cfg.num_queries]
+        self.register_buffer("ref_pts", ref_pts) # Save to model state"""
+
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):

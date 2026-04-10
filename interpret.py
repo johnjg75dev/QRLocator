@@ -131,10 +131,9 @@ def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
         )
 
         plt.tight_layout()
-        page_path = f"report_page_{r + 1}.png"
-        plt.savefig(page_path, dpi=150, bbox_inches="tight")
-        report.append(page_path)
-        print(f"Page {r + 1} saved to {page_path}")
+        plt.show()  # Display in Jupyter notebook
+        report.append(plt.gcf())  # Store figure object
+        print(f"Page {r + 1} displayed")
         plt.close()
 
     # 7. Generate summary page
@@ -192,10 +191,9 @@ def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
             transform=ax.transAxes,
         )
     plt.tight_layout()
-    summary_path = "report_summary.png"
-    plt.savefig(summary_path, dpi=150, bbox_inches="tight")
-    report.append(summary_path)
-    print(f"Summary saved to {summary_path}")
+    plt.show()  # Display in Jupyter notebook
+    report.append(plt.gcf())  # Store figure object
+    print(f"Summary displayed")
     plt.close()
 
     print(f"\n=== Report Complete ===")
@@ -206,3 +204,4 @@ def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
 
 if __name__ == "__main__":
     run_interpretability("checkpoints/last.pt", 5)
+    # run_interpretability("checkpoints/best.pt", 5)

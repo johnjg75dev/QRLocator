@@ -22,10 +22,10 @@ class Config:
     enc_layers: int = 4  # Transformer encoder depth
     dec_layers: int = 4  # Transformer decoder depth
     mlp_ratio: float = 4.0  # FFN hidden-dim multiplier
-    dropout: float = 0.1
+    dropout: float = 0.12
 
     # ── Detection head ─────────────────────────────────────────────────────
-    num_queries: int = 20  # Max QR codes per image (with slack)
+    num_queries: int = 24  # Max QR codes per image (with slack)
     # Each query predicts: [x1, y1, x2, y2] (normalized 0-1) + objectness
 
     # ── Loss weights ───────────────────────────────────────────────────────
@@ -46,16 +46,16 @@ class Config:
     background_dir: Path = Path("data/backgrounds")  # Optional real BGs
 
     # ── Training ───────────────────────────────────────────────────────────
-    batch_size: int = 10
+    batch_size: int = 50
     num_workers: int = 2
-    epochs: int = 3
-    lr: float = 5e-4
-    lr_backbone: float = 5e-4  # Slower LR for CNN stem
+    epochs: int = 100
+    lr: float = 2e-4
+    lr_backbone: float = 2e-4  # Slower LR for CNN stem
     weight_decay: float = 1e-4
     lr_drop: int = 70  # StepLR decay epoch
     grad_clip: float = 50.0  # Gradient clipping max norm
     checkpoint_dir: Path = Path("checkpoints")
-    log_interval: int = 1  # Print every N batches
+    log_interval: int = 10  # Print every N batches
 
     # ── Evaluation ─────────────────────────────────────────────────────────
     conf_threshold: float = 0.5  # Objectness threshold at inference
