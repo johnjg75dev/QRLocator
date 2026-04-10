@@ -131,7 +131,6 @@ class TransformerEncoderLayer(nn.Module):
         x = x + self.ffn(self.norm2(x))
         return x
 
-
 class TransformerDecoderLayer(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, mlp_ratio: float, dropout: float):
         super().__init__()
@@ -154,8 +153,9 @@ class TransformerDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(embed_dim)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, tgt: torch.Tensor, memory: torch.Tensor, query_pos: torch.Tensor) -> torch.Tensor:
-        # 1. Self-attention over queries (add positional query to Q and K)
+    # ADD 'pos' to the signature
+    def forward(self, tgt: torch.Tensor, memory: torch.Tensor, query_pos: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        # 1. Self-attention over queries
         h = self.norm1(tgt)
         q = k = h + query_pos
         sa, _ = self.self_attn(q, k, h)
@@ -164,7 +164,9 @@ class TransformerDecoderLayer(nn.Module):
         # 2. Cross-attention: queries attend to encoder memory
         h = self.norm2(tgt)
         q = h + query_pos
-        ca, _ = self.cross_attn(q, memory, memory)
+        k = memory + pos  
+        
+        ca, _ = self.cross_attn(q, k, memory) # Pass q, k, and memory(values)
         tgt = tgt + self.drop(ca)
 
         tgt = tgt + self.ffn(self.norm3(tgt))
@@ -270,15 +272,13 @@ class QRViTDet(nn.Module):
         # ── Backbone ─────────────────────────────────────────────────────────
         feat = self.backbone(x)  # (B, E, H/10, W/10)
         E = feat.size(1)
-        feat_seq = feat.flatten(2).permute(0, 2, 1)  # (B, S, E)  S=3600
+        feat_seq = feat.flatten(2).permute(0, 2, 1)  # (B, S, E)  S=576
 
-        # ── Positional encoding ──────────────────────────────────────────────
-        feat_seq = self.pos_enc(feat_seq)  # (B, S, E)
+        # Get the 2D position ONCE
+        pos = self.pos_enc.pe # This is the (1, 576, 128) tensor
 
         # ── Encoder ──────────────────────────────────────────────────────────
         memory = feat_seq
-        # Calculate the 2D position ONCE
-        pos = self.pos_enc.pe # This is the (1, 576, 128) tensor
         
         for layer in self.encoder:
             memory = layer(memory, pos=pos) # Inject at every layer
@@ -287,30 +287,28 @@ class QRViTDet(nn.Module):
         # ── Decoder ──────────────────────────────────────────────────────────
         queries = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, E)
         tgt = torch.zeros_like(queries)  # DETR strictly starts with zeros!
+        
         for layer in self.decoder:
-            tgt = layer(tgt, memory, query_pos=queries)
+            # Pass BOTH query_pos and the image pos
+            tgt = layer(tgt, memory, query_pos=queries, pos=pos) 
+            
         tgt = self.dec_norm(tgt)  # (B, Q, E)
 
         # ── Heads ─────────────────────────────────────────────────────────────
-        # Predict Center-X, Center-Y, Width, Height
         pred_cxcywh = self.bbox_head(tgt).sigmoid()  # (B, Q, 4) in [0,1]
         
-        # Unbind the 4 coordinates
         cx, cy, w, h = pred_cxcywh.unbind(-1)
         
-        # Mathematically convert to x1, y1, x2, y2 (Guarantees x2 > x1 and y2 > y1)
         x1 = cx - 0.5 * w
         y1 = cy - 0.5 * h
         x2 = cx + 0.5 * w
         y2 = cy + 0.5 * h
         
-        # Stack back together
         pred_boxes = torch.stack([x1, y1, x2, y2], dim=-1)
-        
         pred_logits = self.class_head(tgt)  # (B, Q, 2)
 
         return {"pred_boxes": pred_boxes, "pred_logits": pred_logits}
-
+    
     @property
     def backbone_params(self):
         return list(self.backbone.parameters())

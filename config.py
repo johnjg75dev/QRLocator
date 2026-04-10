@@ -25,7 +25,7 @@ class Config:
     dropout: float = 0.1
 
     # ── Detection head ─────────────────────────────────────────────────────
-    num_queries: int = 16  # Max QR codes per image (with slack)
+    num_queries: int = 20  # Max QR codes per image (with slack)
     # Each query predicts: [x1, y1, x2, y2] (normalized 0-1) + objectness
 
     # ── Loss weights ───────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ class Config:
     loss_class: float = 1.0  # Training loss: classification weight
     loss_bbox: float = 5.0  # Training loss: L1 box weight
     loss_giou: float = 2.0  # Training loss: GIoU weight
-    eos_coef: float = 0.1  # Down-weight "no-object" class
+    eos_coef: float = 0.5  # Down-weight "no-object" class
 
     # ── Dataset generation ─────────────────────────────────────────────────
     dataset_dir: Path = Path("data/qr_dataset")
@@ -49,11 +49,11 @@ class Config:
     batch_size: int = 10
     num_workers: int = 2
     epochs: int = 100
-    lr: float = 5e-4
-    lr_backbone: float = 5e-4  # Slower LR for CNN stem
+    lr: float = 1e-4
+    lr_backbone: float = 1e-4  # Slower LR for CNN stem
     weight_decay: float = 1e-4
     lr_drop: int = 70  # StepLR decay epoch
-    grad_clip: float = 0.1
+    grad_clip: float = 50.0  # Gradient clipping max norm
     checkpoint_dir: Path = Path("checkpoints")
     log_interval: int = 1  # Print every N batches
 
