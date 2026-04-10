@@ -496,6 +496,17 @@ if __name__ == "__main__":
     parser.add_argument("--image",  type=str, default=None, help="Image path for infer")
     parser.add_argument("--output", type=str, default="output.png",
                         help="Output image path for infer")
+    
+    # Parser for epoch, batch size, learning rate
+    '''parser.add_argument("--epochs", type=int, default=CFG.epochs, help="Number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=CFG.batch_size, help="Training batch size")
+    parser.add_argument("--lr", type=float, default=CFG.lr, help="Learning rate for non-backbone")
+    parser.add_argument("--lr_backbone", type=float, default=CFG.lr_backbone, help="Learning rate for backbone")
+    parser.add_argument("--grad_clip", type=float, default=CFG.grad_clip, help="Max gradient norm for clipping")
+    parser.add_argument("--log_interval", type=int, default=CFG.log_interval, help="Batches between logging during training")
+    #Debug flags -D or --debug to run quick train/eval with reduced dataset and epochs
+    parser.add_argument("--debug","-D", action="store_true", help="Run in debug mode")'''
+
     if not DEBUG:
         args = parser.parse_args()
 

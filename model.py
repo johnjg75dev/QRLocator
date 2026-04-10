@@ -262,11 +262,9 @@ class QRViTDet(nn.Module):
                 nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                
-        # Give queries a random starting point to prevent collapse
-        nn.init.normal_(self.query_embed.weight, std=0.02)
 
     def forward(self, x: torch.Tensor) -> dict:
+        
         B = x.size(0)
 
         # ── Backbone ─────────────────────────────────────────────────────────
@@ -295,17 +293,27 @@ class QRViTDet(nn.Module):
         tgt = self.dec_norm(tgt)  # (B, Q, E)
 
         # ── Heads ─────────────────────────────────────────────────────────────
-        pred_cxcywh = self.bbox_head(tgt).sigmoid()  # (B, Q, 4) in [0,1]
+        # THE FIX: Add the spatial queries back into the content so the head 
+        # instantly knows that all 20 vectors are physically different.
+        tgt_out = tgt + queries 
         
+        # Predict Center-X, Center-Y, Width, Height using the combined tensor
+        pred_cxcywh = self.bbox_head(tgt_out).sigmoid()  # (B, Q, 4) in [0,1]
+        
+        # Unbind the 4 coordinates
         cx, cy, w, h = pred_cxcywh.unbind(-1)
         
+        # Mathematically convert to x1, y1, x2, y2
         x1 = cx - 0.5 * w
         y1 = cy - 0.5 * h
         x2 = cx + 0.5 * w
         y2 = cy + 0.5 * h
         
+        # Stack back together
         pred_boxes = torch.stack([x1, y1, x2, y2], dim=-1)
-        pred_logits = self.class_head(tgt)  # (B, Q, 2)
+        
+        # Also pass the combined tensor to the class head
+        pred_logits = self.class_head(tgt_out)  # (B, Q, 2)
 
         return {"pred_boxes": pred_boxes, "pred_logits": pred_logits}
     

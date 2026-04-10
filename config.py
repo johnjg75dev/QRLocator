@@ -21,7 +21,7 @@ class Config:
     num_heads: int = 8  # Multi-head attention heads
     enc_layers: int = 4  # Transformer encoder depth
     dec_layers: int = 4  # Transformer decoder depth
-    mlp_ratio: float = 3.0  # FFN hidden-dim multiplier
+    mlp_ratio: float = 4.0  # FFN hidden-dim multiplier
     dropout: float = 0.1
 
     # ── Detection head ─────────────────────────────────────────────────────
@@ -48,9 +48,9 @@ class Config:
     # ── Training ───────────────────────────────────────────────────────────
     batch_size: int = 10
     num_workers: int = 2
-    epochs: int = 100
-    lr: float = 1e-4
-    lr_backbone: float = 1e-4  # Slower LR for CNN stem
+    epochs: int = 3
+    lr: float = 5e-4
+    lr_backbone: float = 5e-4  # Slower LR for CNN stem
     weight_decay: float = 1e-4
     lr_drop: int = 70  # StepLR decay epoch
     grad_clip: float = 50.0  # Gradient clipping max norm
