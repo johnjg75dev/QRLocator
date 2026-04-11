@@ -331,6 +331,8 @@ def train(cfg=CFG):
         best_f1 = ckpt["metrics"]["f1"]
         print(f"Resumed at epoch {start_epoch}, current best F1: {best_f1:.4f}")
     else:
+        scheduler = StepLR(optimizer, step_size=cfg.lr_drop, gamma=0.1)
+        criterion = SetCriterion(cfg).to(device)
         start_epoch = 1
         end_epoch = cfg.epochs + 1
         best_f1 = 0.0

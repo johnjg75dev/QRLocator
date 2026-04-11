@@ -153,7 +153,6 @@ class TransformerDecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(embed_dim)
         self.drop = nn.Dropout(dropout)
 
-    # ADD 'pos' to the signature
     def forward(self, tgt: torch.Tensor, memory: torch.Tensor, query_pos: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
         # 1. Self-attention over queries
         h = self.norm1(tgt)
@@ -233,8 +232,24 @@ class QRViTDet(nn.Module):
         )
         self.enc_norm = nn.LayerNorm(cfg.embed_dim)
 
-        # ── Object Queries ──────────────────────────────────────────────────
-        self.query_embed = nn.Embedding(cfg.num_queries, cfg.embed_dim)
+        # ── Explicit Anchors (Grid) ─────────────────────────────────────────
+        # Create a grid of points (e.g., 4x5 grid for 20 queries, 4x4 for 16)
+        
+        # Create normalized coordinates [0.0 to 1.0]
+        y = (torch.arange(cfg.num_queries_rows).float() + 0.5) / cfg.num_queries_rows
+        x = (torch.arange(cfg.num_queries_cols).float() + 0.5) / cfg.num_queries_cols
+        grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
+        
+        # (num_queries, 2) tensor of [cx, cy] points
+        anchors = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1) 
+        self.register_buffer("anchors", anchors)
+
+        # Convert the (X, Y) coordinates into a 128-d Embedding vector
+        self.query_pos_proj = nn.Sequential(
+            nn.Linear(2, cfg.embed_dim),
+            nn.ReLU(),
+            nn.Linear(cfg.embed_dim, cfg.embed_dim)
+        )
 
         # ── Decoder ─────────────────────────────────────────────────────────
         self.decoder = nn.ModuleList(
@@ -293,25 +308,40 @@ class QRViTDet(nn.Module):
         memory = self.enc_norm(memory)
 
         # ── Decoder ──────────────────────────────────────────────────────────
-        queries = self.query_embed.weight.unsqueeze(0).expand(B, -1, -1)  # (B, Q, E)
-        tgt = torch.zeros_like(queries)  # DETR strictly starts with zeros!
+        # 1. Turn the (X, Y) anchors into query embeddings
+        query_pos = self.query_pos_proj(self.anchors) # (Q, E)
+        query_pos = query_pos.unsqueeze(0).expand(B, -1, -1) # (B, Q, E)
+        
+        # 2. Start the decoder with zeros as usual
+        tgt = torch.zeros_like(query_pos)  
         
         for layer in self.decoder:
-            # Pass BOTH query_pos and the image pos
-            tgt = layer(tgt, memory, query_pos=queries, pos=pos) 
+            tgt = layer(tgt, memory, query_pos=query_pos, pos=pos)
             
         tgt = self.dec_norm(tgt)  # (B, Q, E)
 
         # ── Heads ─────────────────────────────────────────────────────────────
-        # THE FIX: Add the spatial queries back into the content so the head 
-        # instantly knows that all 20 vectors are physically different.
-        tgt_out = tgt + queries 
+        tgt_out = tgt + query_pos 
         
-        # Predict Center-X, Center-Y, Width, Height using the combined tensor
-        pred_cxcywh = self.bbox_head(tgt_out).sigmoid()  # (B, Q, 4) in [0,1]
+        # The head now outputs: [delta_cx, delta_cy, w_raw, h_raw]
+        raw_preds = self.bbox_head(tgt_out)  # (B, Q, 4)
+        
+        # Split the predictions
+        delta_cxcy = raw_preds[..., :2]
+        raw_wh = raw_preds[..., 2:]
+        
+        # Add the offset to the Anchor location
+        # Use tanh() * 0.5 so the box can only move a maximum of half the screen
+        # away from its anchor point. This keeps gradients incredibly stable.
+        ref_points = self.anchors.unsqueeze(0).expand(B, -1, -1) # (B, Q, 2)
+        cxcy = (ref_points + delta_cxcy.tanh() * 0.5).clamp(min=0.0, max=1.0)
+        
+        # 2. Width and Height are standard sigmoids
+        w_h = raw_wh.sigmoid()
         
         # Unbind the 4 coordinates
-        cx, cy, w, h = pred_cxcywh.unbind(-1)
+        cx, cy = cxcy.unbind(-1)
+        w, h = w_h.unbind(-1)
         
         # Mathematically convert to x1, y1, x2, y2
         x1 = cx - 0.5 * w
@@ -319,10 +349,7 @@ class QRViTDet(nn.Module):
         x2 = cx + 0.5 * w
         y2 = cy + 0.5 * h
         
-        # Stack back together
         pred_boxes = torch.stack([x1, y1, x2, y2], dim=-1)
-        
-        # Also pass the combined tensor to the class head
         pred_logits = self.class_head(tgt_out)  # (B, Q, 2)
 
         return {"pred_boxes": pred_boxes, "pred_logits": pred_logits}

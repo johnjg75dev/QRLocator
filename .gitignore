@@ -9,3 +9,5 @@ tmp/
 *.jpeg
 *.bmp
 *.gif
+.vscode/
+.idea/

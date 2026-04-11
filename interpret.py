@@ -1,24 +1,142 @@
+import os
+import platform
+import pathlib
+if platform.system() == 'Windows':
+    pathlib.PosixPath = pathlib.WindowsPath
+from pathlib import Path
+import pickle
 import torch
+import torch.nn as nn
+import argparse
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 import matplotlib.pyplot as plt
+import subprocess
+from matplotlib.backends.backend_pdf import PdfPages
 from config import CFG
 from model import QRViTDet
 from dataset import build_dataloaders
+from PIL import Image, ImageDraw
 
 report = []
 
 
+def create_filter_visualization(model, cfg):
+    """Create a matplotlib figure showing the CNN filters from the CNNStem."""
+    import math
+
+    # Get the CNNStem layers
+    backbone = model.backbone.body
+
+    # We'll create a figure with subplots for each convolutional layer
+    num_layers = len(backbone)
+    fig, axes = plt.subplots(1, num_layers, figsize=(5 * num_layers, 5))
+    if num_layers == 1:
+        axes = [axes]
+
+    for layer_idx, layer in enumerate(backbone):
+        if isinstance(layer, nn.Conv2d):
+            # Get the weight tensor: [out_channels, in_channels, kernel_size, kernel_size]
+            weights = layer.weight.data
+
+            # For grayscale input, in_channels = 1, so we can visualize each filter
+            # as a 2D image (kernel_size x kernel_size)
+            out_channels = weights.size(0)
+
+            # Calculate grid dimensions
+            cols = math.ceil(math.sqrt(out_channels))
+            rows = math.ceil(out_channels / cols)
+
+            # Create a grid of subplots for this layer's filters
+            layer_fig, layer_axes = plt.subplots(cols, cols, figsize=(cols * 2, rows * 2))
+            layer_fig.suptitle(
+                f"Layer {layer_idx + 1} - Conv2d (in={weights.size(1)}, out={out_channels}, kernel={weights.size(2)}x{weights.size(3)})",
+                fontsize=14,
+            )
+
+            # Flatten axes for easy iteration
+            layer_axes = layer_axes.flatten() if cols > 1 or rows > 1 else [layer_axes]
+
+            # Normalize weights for visualization
+            min_val, max_val = weights.min().item(), weights.max().item()
+
+            for i in range(out_channels):
+                if i < len(layer_axes):
+                    # Extract the filter (remove the in_channels dimension since it's 1)
+                    filter_img = weights[i, 0, :, :].cpu().numpy()
+
+                    # Plot the filter
+                    layer_axes[i].imshow(filter_img, cmap="gray", vmin=min_val, vmax=max_val)
+                    layer_axes[i].axis("off")
+                    layer_axes[i].set_title(f"Filter {i + 1}")
+
+            # Hide any unused subplots
+            for i in range(len(layer_axes), out_channels):
+                layer_axes[i].axis("off")
+
+            # Add the layer figure to the report
+            report.append(layer_fig)
+
+
+def create_config_page(CFG, checkpoint):
+    """Create a matplotlib figure showing the configuration settings."""
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    ax.axis("off")
+    ax.text(
+        0.5,
+        0.95,
+        "Configuration Settings",
+        fontsize=18,
+        fontweight="bold",
+        ha="center",
+        transform=ax.transAxes,
+    )
+    cfg_attrs = [
+        attr for attr in dir(CFG) if not attr.startswith("_") and not callable(getattr(CFG, attr))
+    ]
+    y_pos = 0.85
+    for attr in cfg_attrs:
+        value = getattr(CFG, attr)
+        ax.text(0.1, y_pos, f"{attr}: {value}", fontsize=12, ha="left", transform=ax.transAxes)
+        y_pos -= 0.05
+    ax.text(
+        0.1,
+        y_pos,
+        f"Checkpoint epoch: {checkpoint['epoch']}",
+        fontsize=12,
+        ha="left",
+        transform=ax.transAxes,
+    )
+    plt.tight_layout()
+    return fig
+
+
 @torch.no_grad()
-def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
+def run_interpretability(
+    checkpoint_path="checkpoints/best.pt", num_samples=1, datasets_path="data/qr_dataset"
+):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    CFG.dataset_dir = Path(datasets_path)
+    CFG.checkpoint_dir = Path(checkpoint_path)
+
+    print(
+        f"Running interpretability report on {device} with model '{checkpoint_path}' and dataset '{datasets_path}'..."
+    )
     # 1. Load Model
     model = QRViTDet(CFG).to(device)
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False, encoding="latin1")
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     print(f"Interpreting Model from Epoch {checkpoint['epoch']}")
+
+    # Create config page and add to report
+    config_fig = create_config_page(CFG, checkpoint)
+    report.append(config_fig)
+
+    # Create visualization of CNN filters from the model's CNNStem
+    filter_fig = create_filter_visualization(model, CFG)
+    report.append(filter_fig)
+    print("Filter visualization page generated")
 
     # 2. Get a real sample
     _, _, test_dl = build_dataloaders(CFG)
@@ -131,10 +249,9 @@ def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
         )
 
         plt.tight_layout()
-        plt.show()  # Display in Jupyter notebook
-        report.append(plt.gcf())  # Store figure object
-        print(f"Page {r + 1} displayed")
-        plt.close()
+        # Store figure for report
+        report.append(plt.gcf())
+        print(f"Page {r + 1} generated")
 
     # 7. Generate summary page
     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
@@ -191,10 +308,24 @@ def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
             transform=ax.transAxes,
         )
     plt.tight_layout()
-    plt.show()  # Display in Jupyter notebook
-    report.append(plt.gcf())  # Store figure object
-    print(f"Summary displayed")
-    plt.close()
+    # Store figure for report
+    report.append(plt.gcf())
+    print(f"Summary generated")
+
+    # Save all figures to a PDF file for pagination
+    pdf_path = "interpretability_report.pdf"
+    with PdfPages(pdf_path) as pdf:
+        for fig in report:
+            pdf.savefig(fig)
+    print(f"\nReport saved to {pdf_path}")
+    # Open PDF with default viewer
+    if platform.system() == "Windows":
+        os.startfile(pdf_path)
+    elif platform.system() == "Darwin":
+        subprocess.run(["open", pdf_path])
+    else:
+        subprocess.run(["xdg-open", pdf_path])
+    plt.close("all")
 
     print(f"\n=== Report Complete ===")
     print(f"Generated {len(report)} pages:")
@@ -203,5 +334,19 @@ def run_interpretability(checkpoint_path="checkpoints/best.pt", num_samples=1):
 
 
 if __name__ == "__main__":
-    run_interpretability("checkpoints/last.pt", 5)
-    # run_interpretability("checkpoints/best.pt", 5)
+    # run_interpretability("checkpoints/best.pt", 5, "data/qr_dataset")
+    run_interpretability("checkpoints/best.pt", 5, "data/qr_dataset")
+    """parser = argparse.ArgumentParser(prog="interpret.py", description="Interpretability Report: Run and visualize model predictions with detailed analysis.")
+    parser.add_argument("--model","-m", type=str, required=True, help="Model name (e.g., 'checkpoints/best.pt')")
+    parser.add_argument("--samples","-n", type=int, default=1, help="Number of samples for test (default: 1))")
+    parser.add_argument("--dataset","-d", type=str, default="data/qr_dataset", help="Directory containing datasets (default: 'data/qr_dataset')")
+
+    args = parser.parse_args()
+    if args.model is None or args.dataset is None:
+        print("Error: Please provide a valid model checkpoint path and dataset directory.")
+        parser.print_help()
+        print("\nExample: python interpret.py -m checkpoints/best.pt -d data/qr_dataset")
+        exit(1)
+    
+    # Run the interpretability report
+    run_interpretability(args.model, args.samples, args.dataset)"""
